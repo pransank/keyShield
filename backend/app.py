@@ -15,48 +15,38 @@ def keyshield(code):
     env_variables = []
 
     # Detect API keys, passwords, and database credentials
-    pattern = re.compile(
+    secret_pattern = re.compile(
         r'(?i)(api[\s_-]*key|password|passwd|pwd|'
         r'(?:db|database)[\s_-]*password|'
         r'(?:db|database)[\s_-]*url)'
-        r'\s*=\s*(["\'])(.*?)\2'
+    )
+
+    # Match the ENTIRE Python variable name and its quoted value
+    assignment_pattern = re.compile(
+        r'^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(["\'])(.*?)\3\s*$'
     )
 
     for line in lines:
-        match = pattern.search(line)
+        match = assignment_pattern.match(line)
 
         if match:
-            original_name = match.group(1)
+            indentation = match.group(1)
+            variable_name = match.group(2)
 
-            # Convert detected name into a standard environment variable
-            name_lower = original_name.lower()
+            # Check the full variable name
+            if secret_pattern.search(variable_name):
 
-            if re.fullmatch(r'api[\s_-]*key', name_lower):
-                env_name = "API_KEY"
+                # Preserve the original variable name
+                env_name = variable_name.upper()
 
-            elif re.fullmatch(r'password|passwd|pwd', name_lower):
-                env_name = "PASSWORD"
+                if env_name not in env_variables:
+                    env_variables.append(env_name)
 
-            elif re.fullmatch(r'(db|database)[\s_-]*password', name_lower):
-                env_name = "DB_PASSWORD"
-
-            elif re.fullmatch(r'(db|database)[\s_-]*url', name_lower):
-                env_name = "DATABASE_URL"
-
-            else:
-                env_name = original_name.upper()
-
-            if env_name not in env_variables:
-                env_variables.append(env_name)
-
-            # Replace the hardcoded secret
-            line = pattern.sub(
-                lambda m: (
-                    f'{m.group(1)} = '
+                # Replace the hardcoded secret
+                line = (
+                    f'{indentation}{variable_name} = '
                     f'os.getenv("{env_name}")'
-                ),
-                line
-            )
+                )
 
         output.append(line)
 
@@ -88,7 +78,7 @@ def scan():
 
     code = data["code"]
 
-    # Use the exact same KeyShield regex engine
+    # Run KeyShield
     secured_code, env_variables = keyshield(code)
 
     return jsonify({

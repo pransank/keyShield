@@ -6,20 +6,17 @@ body {
 }
 
 .container {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
     padding: 20px;
     text-align: center;
 }
 
 h1 {
-    margin: 0;
+    margin: 0 0 4px 0;
     font-size: 24px;
 }
 
 .subtitle {
-    margin: 0;
+    margin: 0 0 16px 0;
     color: #666;
     font-size: 13px;
 }
@@ -33,6 +30,7 @@ button {
     color: white;
     font-size: 14px;
     cursor: pointer;
+    margin-bottom: 12px;
 }
 
 button:hover {
