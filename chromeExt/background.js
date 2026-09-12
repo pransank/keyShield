@@ -1,7 +1,7 @@
 chrome.commands.onCommand.addListener(async (command) => {
     console.log("Shortcut triggered:", command); // Check if the shortcut works
     
-    if (command === "_execute_action") {
+    if (command === "run-scan") {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         console.log("Found active tab:", tab); // Check if it found the tab
         
