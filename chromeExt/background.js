@@ -1,9 +1,18 @@
 chrome.commands.onCommand.addListener(async (command) => {
+    console.log("Shortcut triggered:", command); // Check if the shortcut works
+    
     if (command === "_execute_action") {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        console.log("Found active tab:", tab); // Check if it found the tab
+        
         if (tab) {
-            // Updated to match the listener in content.js
-            chrome.tabs.sendMessage(tab.id, { action: "scanAIInput" });
+            chrome.tabs.sendMessage(tab.id, { action: "scanAIInput" }, (response) => {
+                if (chrome.runtime.lastError) {
+                    console.error("Message error:", chrome.runtime.lastError.message);
+                } else {
+                    console.log("Response from page:", response);
+                }
+            });
         }
     }
 });
