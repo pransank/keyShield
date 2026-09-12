@@ -241,7 +241,8 @@ chrome.runtime.onMessage.addListener(
 
         if (
             request.action === "scanChatGPT" ||
-            request.action === "scanAIInput"
+            request.action === "scanAIInput" ||
+            request.action === "scan_secrets"
         ) {
             scanAIInput().then(sendResponse);
 

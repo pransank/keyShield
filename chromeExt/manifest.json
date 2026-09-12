@@ -4,7 +4,8 @@
     "version": "1.1",
     "description": "Detect and secure hardcoded secrets in ChatGPT, Claude, and Gemini prompts.",
     "permissions": [
-        "activeTab"
+        "activeTab",
+        "scripting"
     ],
     "host_permissions": [
         "http://127.0.0.1:5000/*"
@@ -24,6 +25,9 @@
         "48": "icons/keyshield.png",
         "128": "icons/keyshield.png"
     },
+    "background": {
+        "service_worker": "background.js"
+    },
     "content_scripts": [
         {
             "matches": [
@@ -37,5 +41,13 @@
             ],
             "run_at": "document_idle"
         }
-    ]
+    ],
+    "commands": {
+        "_execute_action": {
+            "suggested_key": {
+                "default": "Ctrl+Shift+K",
+                "mac": "Command+Shift+K"
+            }
+        }
+    }
 }
