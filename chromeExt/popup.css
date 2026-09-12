@@ -36,6 +36,11 @@ button:hover {
     background: #333;
 }
 
+button:disabled {
+    background: #aaa;
+    cursor: not-allowed;
+}
+
 .status {
     margin-top: 15px;
     font-size: 13px;
