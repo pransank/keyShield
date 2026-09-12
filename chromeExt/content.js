@@ -58,23 +58,11 @@ function extractText(el) {
 // Rich contenteditable editors (ChatGPT and Claude both run on ProseMirror;
 // Gemini's is Quill/Lexical-flavored) do NOT take raw DOM edits at face
 // value. They own their internal document model and reconcile whatever
-// lands in the DOM against their own schema — which is why execCommand
-// ('insertText' OR 'insertHTML') kept giving you the same broken result:
-// the editor was re-parsing your <br> tags or split text nodes and
-// re-inserting its own paragraph breaks regardless of what you fed it.
-//
-// The fix is to stop editing the DOM directly and instead simulate an
-// actual clipboard paste. Every one of these editors has a paste handler
-// that's specifically built (and tested against real-world use) to accept
-// arbitrary pasted text — including multi-line code — without mangling
-// line breaks into paragraph spacing. A synthetic ClipboardEvent with a
-// manually-set DataTransfer payload triggers that exact code path, even
-// though the browser won't let scripts trigger a "real" OS-level paste.
+// lands in the DOM against their own schema.
 function pasteText(el, text) {
     el.focus();
 
-    // Select existing content so the paste replaces it, same as a user
-    // selecting all (Ctrl+A) then pasting over it.
+    // Select existing content so the paste replaces it
     const range = document.createRange();
     range.selectNodeContents(el);
     const selection = window.getSelection();
@@ -92,14 +80,9 @@ function pasteText(el, text) {
 
     const handled = el.dispatchEvent(pasteEvent);
 
-    // dispatchEvent returns false if some listener called preventDefault()
-    // on it — i.e. the editor's own paste handler DID intercept and handle
-    // it, which is the success case here (not a failure).
     if (!handled) return true;
 
-    // No listener intercepted the paste event at all (rare — usually means
-    // a plain, non-framework contenteditable, or an editor that doesn't
-    // listen for paste). Fall back to manual line-by-line DOM insertion.
+    // Fall back to manual line-by-line DOM insertion if paste handler isn't registered
     el.textContent = "";
     const lines = text.split("\n");
     lines.forEach((line, i) => {
@@ -193,3 +176,69 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 });
+
+// --- Pre-flight Intercept Feature ---
+
+async function checkAndIntercept(event) {
+    const textbox = getActivePromptElement();
+    if (!textbox) return;
+
+    const isEnterKey = event.type === "keydown" && event.key === "Enter" && !event.shiftKey;
+    const isSubmitClick = event.type === "pointerdown" || event.type === "click";
+
+    if (!isEnterKey && !isSubmitClick) return;
+
+    if (isSubmitClick) {
+        const isSendButton = event.target.closest(
+            'button[aria-label*="Send"], ' +
+            'button[aria-label*="send"], ' +
+            'button[data-testid*="send"], ' +
+            'button[aria-label*="Submit"], ' +
+            'button:has(svg)'
+        );
+        if (!isSendButton) return;
+    }
+
+    const code = extractText(textbox);
+    if (!code || !code.trim()) return;
+
+    try {
+        const response = await fetch("http://127.0.0.1:5000/scan", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code })
+        });
+
+        if (response.ok) {
+            const result = await response.json();
+            const counts = result.severity_counts || {};
+            const moderateCount = counts.moderate || 0;
+            const seriousCount = counts.serious || 0;
+
+            if (moderateCount > 0 || seriousCount > 0) {
+                event.preventDefault();
+                event.stopPropagation();
+                event.stopImmediatePropagation();
+
+                alert(`⚠️ KeyShield Interception!\n\nDetected ${seriousCount} serious and ${moderateCount} moderate severity secret(s).\n\nPlease sanitize your code with KeyShield before sending.`);
+                return false;
+            }
+        }
+    } catch (err) {
+        console.error("KeyShield pre-flight check failed:", err);
+    }
+}
+
+// Capture phase listeners catch interactions before framework event handlers execute
+window.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+        const textbox = getActivePromptElement();
+        if (textbox && (textbox === e.target || textbox.contains(e.target))) {
+            checkAndIntercept(e);
+        }
+    }
+}, true);
+
+window.addEventListener("pointerdown", (e) => {
+    checkAndIntercept(e);
+}, true);
