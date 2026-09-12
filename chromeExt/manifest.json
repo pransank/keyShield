@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "KeyShield",
+  "version": "1.0",
+  "description": "My security extension",
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/keyshield.png",
+      "48": "icons/keyshield.png",
+      "128": "icons/keyshield.png"
+    }
+  },
+  "icons": {
+    "16": "icons/keyshield.png",
+    "48": "icons/keyshield.png",
+    "128": "icons/keyshield.png"
+  },
+  "permissions": []
+}
