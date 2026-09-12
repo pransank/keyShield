@@ -1,13 +1,23 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <style>
-    body { width: 200px; font-family: Arial, sans-serif; padding: 10px; }
-    hraw { margin: 0; font-size: 14px; }
-  </style>
+    <meta charset="UTF-8">
+    <title>KeyShield</title>
+    <link rel="stylesheet" href="popup.css">
 </head>
+
 <body>
-  <h2>Hello from VS Code!</h2>
-  <script src="popup.js"></script>
+    <div class="container">
+        <h1>KeyShield</h1>
+        <p class="subtitle">Protect your code from hardcoded secrets.</p>
+
+        <button id="scanButton">Scan ChatGPT</button>
+
+        <div id="status" class="status">
+            Ready
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
 </body>
 </html>

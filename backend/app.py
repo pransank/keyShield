@@ -1,6 +1,13 @@
 import os
 import re
 
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+
+
+app = Flask(__name__)
+CORS(app)
+
 
 def keyshield(code):
     lines = code.splitlines()
@@ -65,6 +72,34 @@ def keyshield(code):
 
     return result, env_variables
 
+
+# ============================================================
+# FLASK API
+# ============================================================
+
+@app.route("/scan", methods=["POST"])
+def scan():
+    data = request.get_json()
+
+    if not data or "code" not in data:
+        return jsonify({
+            "error": "No code provided"
+        }), 400
+
+    code = data["code"]
+
+    # Use the exact same KeyShield regex engine
+    secured_code, env_variables = keyshield(code)
+
+    return jsonify({
+        "secured_code": secured_code,
+        "secrets_detected": env_variables
+    })
+
+
+# ============================================================
+# ORIGINAL FILE-BASED VERSION
+# ============================================================
 
 def main():
     filename = input("Enter the input filename: ").strip()
@@ -134,5 +169,13 @@ def main():
         print(f"Output: {output_filename}")
 
 
+# ============================================================
+# START FLASK
+# ============================================================
+
 if __name__ == "__main__":
-    main()
+    app.run(
+        host="127.0.0.1",
+        port=5000,
+        debug=True
+    )

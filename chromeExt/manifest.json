@@ -1,20 +1,37 @@
 {
-  "manifest_version": 3,
-  "name": "KeyShield",
-  "version": "1.0",
-  "description": "My security extension",
-  "action": {
-    "default_popup": "popup.html",
-    "default_icon": {
-      "16": "icons/keyshield.png",
-      "48": "icons/keyshield.png",
-      "128": "icons/keyshield.png"
-    }
-  },
-  "icons": {
-    "16": "icons/keyshield.png",
-    "48": "icons/keyshield.png",
-    "128": "icons/keyshield.png"
-  },
-  "permissions": []
+    "manifest_version": 3,
+    "name": "KeyShield",
+    "version": "1.0",
+    "description": "Detect and secure hardcoded secrets in code.",
+    "permissions": [
+        "activeTab"
+    ],
+    "host_permissions": [
+        "http://127.0.0.1:5000/*"
+    ],
+    "action": {
+        "default_popup": "popup.html",
+        "default_icon": {
+            "16": "icons/keyshield.png",
+            "32": "icons/keyshield.png",
+            "48": "icons/keyshield.png",
+            "128": "icons/keyshield.png"
+        }
+    },
+    "icons": {
+        "16": "icons/keyshield.png",
+        "32": "icons/keyshield.png",
+        "48": "icons/keyshield.png",
+        "128": "icons/keyshield.png"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "https://chatgpt.com/*"
+            ],
+            "js": [
+                "content.js"
+            ]
+        }
+    ]
 }
