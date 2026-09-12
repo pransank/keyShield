@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>KeyShield — Live Risk Heatmap</title>
+<style>
+    :root {
+        --bg-page: #0a0e14;
+        --bg-panel: #10151d;
+        --bg-panel-header: #151b25;
+        --border: #1f2733;
+        --text: #d8dee9;
+        --text-dim: #6b7685;
+        --text-faint: #3d4654;
+
+        --high: #ff5c5c;
+        --high-bg: rgba(255, 92, 92, 0.14);
+        --high-bg-strong: rgba(255, 92, 92, 0.30);
+        --medium: #ffa94d;
+        --medium-bg: rgba(255, 169, 77, 0.12);
+        --medium-bg-strong: rgba(255, 169, 77, 0.28);
+        --low: #ffd43b;
+        --low-bg: rgba(255, 212, 59, 0.10);
+        --low-bg-strong: rgba(255, 212, 59, 0.26);
+
+        --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+        --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+        margin: 0;
+        background: var(--bg-page);
+        color: var(--text);
+        font-family: var(--sans);
+        padding: 32px 24px;
+        min-height: 100vh;
+    }
+
+    .app {
+        max-width: 900px;
+        margin: 0 auto;
+    }
+
+    header h1 {
+        font-size: 20px;
+        font-weight: 600;
+        margin: 0 0 4px 0;
+        letter-spacing: -0.01em;
+    }
+
+    header p {
+        margin: 0 0 20px 0;
+        font-size: 13px;
+        color: var(--text-dim);
+        max-width: 60ch;
+    }
+
+    /* ---- controls ---- */
+    .controls {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 16px;
+        flex-wrap: wrap;
+    }
+
+    textarea#codeInput {
+        width: 100%;
+        min-height: 110px;
+        background: var(--bg-panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 12.5px;
+        padding: 10px 12px;
+        resize: vertical;
+        margin-bottom: 8px;
+    }
+
+    textarea#codeInput:focus {
+        outline: none;
+        border-color: #364152;
+    }
+
+    button {
+        font-family: var(--sans);
+        font-size: 13px;
+        font-weight: 500;
+        padding: 8px 14px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--bg-panel);
+        color: var(--text);
+        cursor: pointer;
+        transition: border-color 0.15s ease, background 0.15s ease;
+    }
+
+    button:hover { border-color: #364152; background: #161d29; }
+
+    button.primary {
+        background: #1d2635;
+        border-color: #2e3d54;
+    }
+
+    button.primary:hover { border-color: #4a6182; }
+
+    .status-line {
+        font-size: 12px;
+        color: var(--text-dim);
+        margin-bottom: 20px;
+        min-height: 16px;
+    }
+
+    /* ---- severity summary chips ---- */
+    .summary {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 16px;
+    }
+
+    .chip {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 12.5px;
+        color: var(--text-dim);
+        background: var(--bg-panel);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 5px 12px 5px 10px;
+    }
+
+    .chip .swatch {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+    }
+
+    .chip strong { color: var(--text); font-weight: 600; }
+
+    /* ---- editor window ---- */
+    .editor {
+        background: var(--bg-panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    .editor-topbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 14px;
+        background: var(--bg-panel-header);
+        border-bottom: 1px solid var(--border);
+    }
+
+    .editor-topbar .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: #2a323f;
+    }
+
+    .editor-topbar .filename {
+        margin-left: 6px;
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text-dim);
+    }
+
+    .code-body {
+        font-family: var(--mono);
+        font-size: 13px;
+        line-height: 1.6;
+        overflow-x: auto;
+        padding: 6px 0;
+    }
+
+    .code-line {
+        display: flex;
+        white-space: pre;
+        padding: 0 14px;
+        border-left: 2px solid transparent;
+    }
+
+    .code-line.heat-high  { background: var(--high-bg);   border-left-color: var(--high); }
+    .code-line.heat-medium{ background: var(--medium-bg); border-left-color: var(--medium); }
+    .code-line.heat-low   { background: var(--low-bg);    border-left-color: var(--low); }
+
+    .line-num {
+        color: var(--text-faint);
+        width: 34px;
+        flex-shrink: 0;
+        text-align: right;
+        margin-right: 16px;
+        user-select: none;
+    }
+
+    .line-content { flex: 1; }
+
+    /* ---- syntax tokens (self-contained, no external highlighter) ---- */
+    .tok-comment  { color: #4b8a5e; }
+    .tok-string   { color: #7ec6a3; }
+    .tok-keyword  { color: #6ba6e8; }
+    .tok-number   { color: #d2a86a; }
+    .tok-func     { color: #c9a5e0; }
+
+    /* ---- secret marks ---- */
+    mark.secret-mark {
+        all: unset;
+        cursor: help;
+        border-radius: 3px;
+        padding: 0 2px;
+        font-family: var(--mono);
+    }
+
+    mark.severity-high   { background: var(--high-bg-strong);   box-shadow: inset 0 -2px 0 var(--high); }
+    mark.severity-medium { background: var(--medium-bg-strong); box-shadow: inset 0 -2px 0 var(--medium); }
+    mark.severity-low    { background: var(--low-bg-strong);    box-shadow: inset 0 -2px 0 var(--low); }
+
+    .empty-state {
+        padding: 40px 14px;
+        text-align: center;
+        color: var(--text-dim);
+        font-size: 13px;
+    }
+
+    /* ---- tooltip ---- */
+    #tooltip {
+        position: fixed;
+        z-index: 50;
+        max-width: 280px;
+        background: #161d29;
+        border: 1px solid #2e3d54;
+        border-radius: 8px;
+        padding: 12px 14px;
+        font-size: 12.5px;
+        line-height: 1.5;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+        opacity: 0;
+        transform: translateY(4px);
+        pointer-events: none;
+        transition: opacity 0.12s ease, transform 0.12s ease;
+    }
+
+    #tooltip.visible { opacity: 1; transform: translateY(0); }
+
+    #tooltip .tt-severity {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 2px 7px;
+        border-radius: 4px;
+        margin-bottom: 8px;
+    }
+
+    #tooltip .tt-severity.high   { background: var(--high-bg-strong);   color: var(--high); }
+    #tooltip .tt-severity.medium { background: var(--medium-bg-strong); color: var(--medium); }
+    #tooltip .tt-severity.low    { background: var(--low-bg-strong);    color: var(--low); }
+
+    #tooltip .tt-row {
+        color: var(--text-dim);
+        margin-top: 4px;
+    }
+
+    #tooltip .tt-row span.val {
+        color: var(--text);
+        font-family: var(--mono);
+    }
+</style>
+</head>
+<body>
+
+<div class="app">
+    <header>
+        <h1>KeyShield — Live Risk Heatmap</h1>
+        <p>Scans pasted Python for hardcoded secrets and highlights exactly where the risk is, weighted by severity.</p>
+    </header>
+
+    <div class="controls">
+        <button id="scanBtn" class="primary">Scan code</button>
+        <button id="demoBtn">Load sample</button>
+    </div>
+    <textarea id="codeInput" spellcheck="false" placeholder="Paste Python code here, then click Scan code."></textarea>
+    <div class="status-line" id="statusLine"></div>
+
+    <div class="summary" id="summary" style="display:none;"></div>
+
+    <div class="editor">
+        <div class="editor-topbar">
+            <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+            <span class="filename" id="fileName">app.py</span>
+        </div>
+        <div class="code-body" id="codeBody">
+            <div class="empty-state">No code scanned yet.</div>
+        </div>
+    </div>
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+/* ============================================================
+   PLUGGING IN REAL DATA
+   ------------------------------------------------------------
+   Call renderHeatmap(data) any time you have a fresh scan result,
+   where `data` matches exactly:
+
+   {
+     "original_code": "...",
+     "secured_code": "...",
+     "findings": [
+       { "line": 12, "severity": "high", "type": "password",
+         "original": "mysecretpassword123",
+         "replacement": "os.getenv(\"PASSWORD\")" }
+     ]
+   }
+
+   The two buttons below just call this same function — one after a
+   fetch() to your backend, one with hardcoded sample JSON. Wire your
+   own submit/upload flow the same way: get the JSON, call renderHeatmap.
+   ============================================================ */
+
+const KEYSHIELD_ENDPOINT = "http://127.0.0.1:5000/scan_detailed";
+
+const SEVERITY_ORDER = { high: 3, medium: 2, low: 1 };
+const SEVERITY_LABEL = { high: "High", medium: "Medium", low: "Low" };
+const TYPE_LABEL = {
+    api_key: "Hardcoded API key",
+    password: "Hardcoded password",
+    db_password: "Hardcoded database password",
+    database_url: "Hardcoded database URL",
+    aws_secret_access_key: "Hardcoded AWS secret key",
+    aws_access_key_id: "Hardcoded AWS access key",
+    secret_key: "Hardcoded secret key",
+    auth_token: "Hardcoded auth token",
+    access_token: "Hardcoded access token",
+    token: "Hardcoded token",
+    secret: "Hardcoded secret"
+};
+
+function escapeHtml(str) {
+    return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
+
+function maskSecret(value) {
+    if (!value) return "";
+    if (value.length <= 4) return "\u2022".repeat(value.length);
+    const visible = value.slice(0, 4);
+    const hiddenCount = Math.min(value.length - 4, 8);
+    return visible + "\u2022".repeat(hiddenCount);
+}
+
+/* ---- tiny, dependency-free Python token highlighter ----
+   Not a full grammar — just enough to make pasted code readable
+   (keywords / strings / comments / numbers / call names) without
+   pulling in an external library or a CDN call that could fail
+   on flaky venue wifi mid-demo. */
+const PY_TOKEN_RE =
+    /(#.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|\b(import|from|def|return|if|elif|else|for|while|class|try|except|finally|with|as|pass|break|continue|True|False|None|and|or|not|in|is|lambda|global|nonlocal|yield|assert|del|raise)\b|\b(\d+(?:\.\d+)?)\b|\b([a-zA-Z_]\w*)(?=\()/g;
+
+function highlightPython(text) {
+    let out = "";
+    let lastIndex = 0;
+    PY_TOKEN_RE.lastIndex = 0;
+    let m;
+    while ((m = PY_TOKEN_RE.exec(text)) !== null) {
+        out += escapeHtml(text.slice(lastIndex, m.index));
+        if (m[1] !== undefined) out += `<span class="tok-comment">${escapeHtml(m[1])}</span>`;
+        else if (m[2] !== undefined) out += `<span class="tok-string">${escapeHtml(m[2])}</span>`;
+        else if (m[3] !== undefined) out += `<span class="tok-keyword">${escapeHtml(m[3])}</span>`;
+        else if (m[4] !== undefined) out += `<span class="tok-number">${escapeHtml(m[4])}</span>`;
+        else if (m[5] !== undefined) out += `<span class="tok-func">${escapeHtml(m[5])}</span>`;
+        lastIndex = PY_TOKEN_RE.lastIndex;
+    }
+    out += escapeHtml(text.slice(lastIndex));
+    return out;
+}
+
+function renderLineHtml(lineText, findings) {
+    if (!findings || findings.length === 0) {
+        return highlightPython(lineText);
+    }
+
+    const located = findings
+        .map((f) => ({ f, idx: lineText.indexOf(f.original) }))
+        .filter((x) => x.idx !== -1)
+        .sort((a, b) => a.idx - b.idx);
+
+    if (located.length === 0) return highlightPython(lineText);
+
+    let cursor = 0;
+    let html = "";
+
+    located.forEach(({ f, idx }) => {
+        if (idx < cursor) return; // overlapping match, skip
+        html += highlightPython(lineText.slice(cursor, idx));
+
+        const secretText = lineText.slice(idx, idx + f.original.length);
+        const typeLabel = TYPE_LABEL[f.type] || `Hardcoded ${f.type.replace(/_/g, " ")}`;
+
+        html += `<mark class="secret-mark severity-${f.severity}"
+            data-severity="${f.severity}"
+            data-what="${escapeHtml(typeLabel)}"
+            data-masked="${escapeHtml(maskSecret(f.original))}"
+            data-replacement="${escapeHtml(f.replacement)}"
+        >${escapeHtml(secretText)}</mark>`;
+
+        cursor = idx + f.original.length;
+    });
+
+    html += highlightPython(lineText.slice(cursor));
+    return html;
+}
+
+function renderHeatmap(data) {
+    const codeBody = document.getElementById("codeBody");
+    const summary = document.getElementById("summary");
+    const lines = data.original_code.split("\n");
+
+    const findingsByLine = {};
+    data.findings.forEach((f) => {
+        (findingsByLine[f.line] = findingsByLine[f.line] || []).push(f);
+    });
+
+    if (data.findings.length === 0) {
+        codeBody.innerHTML = "";
+        lines.forEach((lineText, i) => {
+            codeBody.appendChild(buildLineEl(i + 1, lineText, null));
+        });
+        summary.style.display = "none";
+        return;
+    }
+
+    codeBody.innerHTML = "";
+    lines.forEach((lineText, i) => {
+        const lineNo = i + 1;
+        const lineFindings = findingsByLine[lineNo] || null;
+        codeBody.appendChild(buildLineEl(lineNo, lineText, lineFindings));
+    });
+
+    renderSummary(data.findings);
+}
+
+function buildLineEl(lineNo, lineText, findings) {
+    const row = document.createElement("div");
+    row.className = "code-line";
+
+    if (findings && findings.length) {
+        const worst = findings.reduce((a, b) =>
+            SEVERITY_ORDER[b.severity] > SEVERITY_ORDER[a.severity] ? b : a
+        );
+        row.classList.add(`heat-${worst.severity}`);
+    }
+
+    const num = document.createElement("span");
+    num.className = "line-num";
+    num.textContent = lineNo;
+
+    const content = document.createElement("span");
+    content.className = "line-content";
+    content.innerHTML = renderLineHtml(lineText, findings) || "&nbsp;";
+
+    row.appendChild(num);
+    row.appendChild(content);
+    return row;
+}
+
+function renderSummary(findings) {
+    const counts = { high: 0, medium: 0, low: 0 };
+    findings.forEach((f) => counts[f.severity]++);
+
+    const summary = document.getElementById("summary");
+    summary.style.display = "flex";
+    summary.innerHTML = ["high", "medium", "low"]
+        .filter((s) => counts[s] > 0)
+        .map(
+            (s) => `
+        <div class="chip">
+            <span class="swatch" style="background:var(--${s})"></span>
+            <strong>${counts[s]}</strong> ${SEVERITY_LABEL[s]}
+        </div>`
+        )
+        .join("");
+}
+
+/* ---- tooltip wiring (event delegation, works for lines added later) ---- */
+const tooltip = document.getElementById("tooltip");
+
+document.getElementById("codeBody").addEventListener("mouseover", (e) => {
+    const mark = e.target.closest("mark.secret-mark");
+    if (!mark) return;
+
+    tooltip.innerHTML = `
+        <div class="tt-severity ${mark.dataset.severity}">${SEVERITY_LABEL[mark.dataset.severity]}</div>
+        <div>${mark.dataset.what}</div>
+        <div class="tt-row">Value: <span class="val">${mark.dataset.masked}</span></div>
+        <div class="tt-row">Replaced with: <span class="val">${mark.dataset.replacement}</span></div>
+    `;
+
+    const rect = mark.getBoundingClientRect();
+    tooltip.style.left = `${rect.left}px`;
+    tooltip.style.top = `${rect.bottom + 8}px`;
+    tooltip.classList.add("visible");
+});
+
+document.getElementById("codeBody").addEventListener("mouseout", (e) => {
+    if (e.target.closest("mark.secret-mark")) {
+        tooltip.classList.remove("visible");
+    }
+});
+
+/* ---- demo wiring ---- */
+const SAMPLE_DATA = {
+    original_code:
+`import requests
+
+api_key = "sk-fake-123456"
+password = "hunter2"
+db_password = "fake-db-password"
+database_url = "postgresql://user:password@localhost/mydb"
+
+print(api_key)`,
+    secured_code:
+`import os
+
+import requests
+
+api_key = os.getenv("API_KEY")
+password = os.getenv("PASSWORD")
+db_password = os.getenv("DB_PASSWORD")
+database_url = os.getenv("DATABASE_URL")
+
+print(api_key)`,
+    findings: [
+        { line: 3, severity: "high", type: "api_key", original: "sk-fake-123456", replacement: 'os.getenv("API_KEY")' },
+        { line: 4, severity: "medium", type: "password", original: "hunter2", replacement: 'os.getenv("PASSWORD")' },
+        { line: 5, severity: "medium", type: "db_password", original: "fake-db-password", replacement: 'os.getenv("DB_PASSWORD")' },
+        { line: 6, severity: "low", type: "database_url", original: "postgresql://user:password@localhost/mydb", replacement: 'os.getenv("DATABASE_URL")' }
+    ]
+};
+
+document.getElementById("demoBtn").addEventListener("click", () => {
+    document.getElementById("codeInput").value = SAMPLE_DATA.original_code;
+    document.getElementById("statusLine").textContent = "Loaded sample data (no backend call).";
+    renderHeatmap(SAMPLE_DATA);
+});
+
+document.getElementById("scanBtn").addEventListener("click", async () => {
+    const code = document.getElementById("codeInput").value;
+    const statusLine = document.getElementById("statusLine");
+
+    if (!code.trim()) {
+        statusLine.textContent = "Paste some code first.";
+        return;
+    }
+
+    statusLine.textContent = "Scanning...";
+
+    try {
+        const res = await fetch(KEYSHIELD_ENDPOINT, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code })
+        });
+
+        if (!res.ok) throw new Error("Backend returned an error.");
+
+        const data = await res.json();
+        renderHeatmap(data);
+        statusLine.textContent = data.findings.length
+            ? `${data.findings.length} finding(s).`
+            : "No secrets detected.";
+    } catch (err) {
+        console.error(err);
+        statusLine.textContent = "Could not reach KeyShield backend at 127.0.0.1:5000. Try 'Load sample' instead.";
+    }
+});
+</script>
+</body>
+</html>

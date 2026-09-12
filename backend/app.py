@@ -59,6 +59,68 @@ def severity_counts_for(env_variables):
     return counts
 
 
+# Maps this codebase's internal three-tier severity naming ("serious" /
+# "moderate" / "low") to the high/medium/low labels the heatmap frontend
+# expects. Two separate vocabularies exist here on purpose — the /scan
+# response format is already relied on by the extension, so it's left
+# alone rather than renamed to match this new endpoint.
+_SEVERITY_LABEL = {"serious": "high", "moderate": "medium", "low": "low"}
+
+
+def keyshield_detailed(code):
+    """Same detection logic as keyshield(), but returns per-finding detail
+    (line number, severity, raw secret value, replacement) instead of just
+    the secured code and a flat list of env var names."""
+    lines = code.splitlines()
+    findings = []
+
+    def make_replacer(line_no):
+        def replace_match(m):
+            matched_name = m.group(1)
+            secret_value = m.group(3)
+            env_name = _env_name_for(matched_name)
+            severity_label = _SEVERITY_LABEL[SEVERITY_MAP.get(env_name, "low")]
+            replacement = f'os.getenv("{env_name}")'
+
+            findings.append({
+                "line": line_no,
+                "severity": severity_label,
+                "type": env_name.lower(),
+                "original": secret_value,
+                "replacement": replacement
+            })
+
+            return f'{matched_name} = {replacement}'
+        return replace_match
+
+    secured_lines = [
+        SECRET_LINE_RE.sub(make_replacer(line_no), line)
+        for line_no, line in enumerate(lines, start=1)
+    ]
+    secured_code = "\n".join(secured_lines)
+
+    if findings and not re.search(
+        r'^\s*import\s+os\s*$', secured_code, re.MULTILINE
+    ):
+        secured_code = "import os\n\n" + secured_code
+
+    return {
+        "original_code": code,
+        "secured_code": secured_code,
+        "findings": findings
+    }
+
+
+@app.route("/scan_detailed", methods=["POST"])
+def scan_detailed():
+    data = request.get_json()
+
+    if not data or "code" not in data:
+        return jsonify({"error": "No code provided"}), 400
+
+    return jsonify(keyshield_detailed(data["code"]))
+
+
 def _env_name_for(matched_name):
     """Map the identifier text that was actually matched to a canonical
     env var name, checking the same ordered list used to build the regex
