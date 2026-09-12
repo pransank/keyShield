@@ -1,6 +1,7 @@
 // KeyShield content script — works on ChatGPT, Claude, and Gemini
 
-// Site-scoped selector groups.
+// Site-scoped selector groups. Checking hostname first avoids wasting time
+// probing selectors that belong to a platform you're not even on.
 const PLATFORM_SELECTORS = {
     "chatgpt.com": [
         "#prompt-textarea",
@@ -12,11 +13,14 @@ const PLATFORM_SELECTORS = {
         "div[contenteditable='true'][aria-label*='ChatGPT']"
     ],
     "claude.ai": [
+        // Claude's composer is a ProseMirror instance, not a plain div.
         "div[contenteditable='true'].ProseMirror",
         "div[contenteditable='true'][aria-label*='Claude']",
         "fieldset div[contenteditable='true']"
     ],
     "gemini.google.com": [
+        // Gemini's input is a rich-textarea custom element wrapping a
+        // contenteditable (historically Quill-based) div.
         "rich-textarea div[contenteditable='true']",
         "div[contenteditable='true'].ql-editor",
         ".simplified-input-area div[contenteditable='true']",
@@ -24,7 +28,8 @@ const PLATFORM_SELECTORS = {
     ]
 };
 
-// Generic fallback list.
+// Generic fallback list, tried if the hostname isn't recognized or none of
+// its selectors hit — e.g. the platforms ship a redesign before you notice.
 const FALLBACK_SELECTORS = [
     "textarea",
     "div[contenteditable='true'][role='textbox']",
@@ -37,53 +42,81 @@ function getActivePromptElement() {
     const candidates = [...scoped, ...FALLBACK_SELECTORS];
 
     for (const selector of candidates) {
-        const elements = document.querySelectorAll(selector);
-
-        for (const el of elements) {
-            // Skip elements that aren't actually visible.
-            if (el.offsetParent !== null) {
-                return el;
-            }
-        }
+        const el = document.querySelector(selector);
+        // Skip elements that exist in the DOM but aren't actually visible/usable
+        if (el && el.offsetParent !== null) return el;
     }
 
     return null;
 }
 
 function extractText(el) {
-    if (el.tagName === "TEXTAREA") {
-        return el.value;
-    }
-
+    if (el.tagName === "TEXTAREA") return el.value;
     return el.innerText;
 }
 
-function replaceContentEditableText(el, newText) {
+// Rich contenteditable editors (ChatGPT and Claude both run on ProseMirror;
+// Gemini's is Quill/Lexical-flavored) do NOT take raw DOM edits at face
+// value. They own their internal document model and reconcile whatever
+// lands in the DOM against their own schema — which is why execCommand
+// ('insertText' OR 'insertHTML') kept giving you the same broken result:
+// the editor was re-parsing your <br> tags or split text nodes and
+// re-inserting its own paragraph breaks regardless of what you fed it.
+//
+// The fix is to stop editing the DOM directly and instead simulate an
+// actual clipboard paste. Every one of these editors has a paste handler
+// that's specifically built (and tested against real-world use) to accept
+// arbitrary pasted text — including multi-line code — without mangling
+// line breaks into paragraph spacing. A synthetic ClipboardEvent with a
+// manually-set DataTransfer payload triggers that exact code path, even
+// though the browser won't let scripts trigger a "real" OS-level paste.
+function pasteText(el, text) {
     el.focus();
 
+    // Select existing content so the paste replaces it, same as a user
+    // selecting all (Ctrl+A) then pasting over it.
     const range = document.createRange();
     range.selectNodeContents(el);
-
     const selection = window.getSelection();
     selection.removeAllRanges();
     selection.addRange(range);
 
-    if (document.execCommand("insertText", false, newText)) {
-        return true;
-    }
+    const dataTransfer = new DataTransfer();
+    dataTransfer.setData("text/plain", text);
 
-    el.textContent = "";
-    el.appendChild(document.createTextNode(newText));
-
-    const inputEvent = new InputEvent("input", {
+    const pasteEvent = new ClipboardEvent("paste", {
+        clipboardData: dataTransfer,
         bubbles: true,
-        cancelable: true,
-        inputType: "insertText",
-        data: newText
+        cancelable: true
     });
 
-    el.dispatchEvent(inputEvent);
+    const handled = el.dispatchEvent(pasteEvent);
 
+    // dispatchEvent returns false if some listener called preventDefault()
+    // on it — i.e. the editor's own paste handler DID intercept and handle
+    // it, which is the success case here (not a failure).
+    if (!handled) return true;
+
+    // No listener intercepted the paste event at all (rare — usually means
+    // a plain, non-framework contenteditable, or an editor that doesn't
+    // listen for paste). Fall back to manual line-by-line DOM insertion.
+    el.textContent = "";
+    const lines = text.split("\n");
+    lines.forEach((line, i) => {
+        el.appendChild(document.createTextNode(line));
+        if (i < lines.length - 1) {
+            el.appendChild(document.createElement("br"));
+        }
+    });
+
+    el.dispatchEvent(
+        new InputEvent("input", {
+            bubbles: true,
+            cancelable: true,
+            inputType: "insertText",
+            data: text
+        })
+    );
     return false;
 }
 
@@ -92,25 +125,17 @@ function replaceTextareaValue(el, newText) {
         HTMLTextAreaElement.prototype,
         "value"
     ).set;
-
     setter.call(el, newText);
 
-    el.dispatchEvent(new Event("input", {
-        bubbles: true
-    }));
-
-    el.dispatchEvent(new Event("change", {
-        bubbles: true
-    }));
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 async function scanAIInput() {
     const textbox = getActivePromptElement();
 
     if (!textbox) {
-        return {
-            message: "Could not find input box on this AI platform."
-        };
+        return { message: "Could not find input box on this AI platform." };
     }
 
     const isEditable = textbox.isContentEditable;
@@ -120,133 +145,51 @@ async function scanAIInput() {
     console.log("KeyShield extracted content:", code);
 
     if (!code || !code.trim()) {
-        return {
-            message: "Input box is empty."
-        };
+        return { message: "Input box is empty." };
     }
 
     try {
-        const response = await fetch(
-            "http://127.0.0.1:5000/scan",
-            {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({ code })
-            }
-        );
+        const response = await fetch("http://127.0.0.1:5000/scan", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code })
+        });
 
         if (!response.ok) {
-            return {
-                message: "Backend error."
-            };
+            return { message: "Backend error." };
         }
 
         const result = await response.json();
-
         console.log("KeyShield result:", result);
 
-        if (
-            !result.secrets_detected ||
-            result.secrets_detected.length === 0
-        ) {
+        if (!result.secrets_detected || result.secrets_detected.length === 0) {
             return {
-                message: "No secrets detected."
+                message: "No secrets detected.",
+                secretsDetected: [],
+                severityCounts: { serious: 0, moderate: 0, low: 0 }
             };
         }
 
         if (isEditable) {
-            replaceContentEditableText(
-                textbox,
-                result.secured_code
-            );
+            pasteText(textbox, result.secured_code);
         } else {
-            replaceTextareaValue(
-                textbox,
-                result.secured_code
-            );
+            replaceTextareaValue(textbox, result.secured_code);
         }
 
         return {
-            message:
-                `${result.secrets_detected.length} secret(s) secured.`
+            message: `${result.secrets_detected.length} secret(s) secured.`,
+            secretsDetected: result.secrets_detected,
+            severityCounts: result.severity_counts
         };
-
     } catch (error) {
         console.error("KeyShield error:", error);
-
-        return {
-            message:
-                "Could not connect to KeyShield backend."
-        };
+        return { message: "Could not connect to KeyShield backend." };
     }
 }
 
-
-// ============================================================
-// AUTO-DETECTION / DOM WATCHER
-// ============================================================
-
-// Prevent attaching our initialization logic multiple times.
-let keyShieldInitialized = false;
-
-function initializeKeyShield() {
-    const textbox = getActivePromptElement();
-
-    if (!textbox) {
-        return false;
-    }
-
-    if (keyShieldInitialized) {
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === "scanChatGPT" || request.action === "scanAIInput") {
+        scanAIInput().then(sendResponse);
         return true;
     }
-
-    keyShieldInitialized = true;
-
-    console.log(
-        "KeyShield: input detected. Protection initialized."
-    );
-
-    return true;
-}
-
-
-// Try immediately in case the page is already loaded.
-initializeKeyShield();
-
-
-// ChatGPT/Claude/Gemini dynamically create their UI.
-// MutationObserver watches for those elements appearing later.
-const keyShieldObserver = new MutationObserver(() => {
-    if (!keyShieldInitialized) {
-        initializeKeyShield();
-    }
 });
-
-
-// Start watching the entire page for dynamically-created elements.
-keyShieldObserver.observe(document.documentElement, {
-    childList: true,
-    subtree: true
-});
-
-
-// ============================================================
-// MESSAGE HANDLER
-// ============================================================
-
-chrome.runtime.onMessage.addListener(
-    (request, sender, sendResponse) => {
-
-        if (
-            request.action === "scanChatGPT" ||
-            request.action === "scanAIInput" ||
-            request.action === "scan_secrets"
-        ) {
-            scanAIInput().then(sendResponse);
-
-            return true;
-        }
-    }
-);

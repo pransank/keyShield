@@ -9,54 +9,84 @@ app = Flask(__name__)
 CORS(app)
 
 
+# Ordered (pattern, ENV_NAME) pairs. Order matters: more specific patterns
+# must come before generic ones, or e.g. "db_password" would get eaten by
+# the plain "password" rule and mislabeled.
+SECRET_PATTERNS = [
+    (r'aws[\s_-]*secret[\s_-]*(?:access[\s_-]*)?key', "AWS_SECRET_ACCESS_KEY"),
+    (r'aws[\s_-]*access[\s_-]*key(?:[\s_-]*id)?', "AWS_ACCESS_KEY_ID"),
+    (r'(?:db|database)[\s_-]*password', "DB_PASSWORD"),
+    (r'(?:db|database)[\s_-]*url', "DATABASE_URL"),
+    (r'api[\s_-]*key', "API_KEY"),
+    (r'secret[\s_-]*key', "SECRET_KEY"),
+    (r'access[\s_-]*token', "ACCESS_TOKEN"),
+    (r'auth[\s_-]*token', "AUTH_TOKEN"),
+    (r'password|passwd|pwd', "PASSWORD"),
+    (r'token', "TOKEN"),
+    (r'secret', "SECRET"),
+]
+
+_NAME_ALTERNATION = "|".join(f"(?:{p})" for p, _ in SECRET_PATTERNS)
+SECRET_LINE_RE = re.compile(
+    rf'(?i)\b({_NAME_ALTERNATION})\b\s*=\s*(["\'])(.*?)\2'
+)
+
+# Which severity bucket each detected env var falls into. Raw credentials
+# and tokens are the ones that grant direct account/API access if leaked —
+# those are "serious". Passwords are "moderate" (still bad, usually scoped
+# to one system). Connection strings are "low" by default since this is a
+# rough heuristic, not a real risk model — call this out if anyone asks.
+SEVERITY_MAP = {
+    "AWS_SECRET_ACCESS_KEY": "serious",
+    "AWS_ACCESS_KEY_ID": "serious",
+    "API_KEY": "serious",
+    "SECRET_KEY": "serious",
+    "AUTH_TOKEN": "serious",
+    "ACCESS_TOKEN": "serious",
+    "TOKEN": "serious",
+    "SECRET": "serious",
+    "PASSWORD": "moderate",
+    "DB_PASSWORD": "moderate",
+    "DATABASE_URL": "low",
+}
+
+
+def severity_counts_for(env_variables):
+    counts = {"serious": 0, "moderate": 0, "low": 0}
+    for name in env_variables:
+        severity = SEVERITY_MAP.get(name, "low")
+        counts[severity] += 1
+    return counts
+
+
+def _env_name_for(matched_name):
+    """Map the identifier text that was actually matched to a canonical
+    env var name, checking the same ordered list used to build the regex
+    so behavior stays in sync with detection."""
+    normalized = matched_name.lower()
+    for pattern, env_name in SECRET_PATTERNS:
+        if re.fullmatch(pattern, normalized, re.IGNORECASE):
+            return env_name
+    return re.sub(r'\W+', '_', matched_name).upper()
+
+
 def keyshield(code):
-    lines = code.splitlines()
-    output = []
     env_variables = []
 
-    # Detect API keys, passwords, and database credentials
-    secret_pattern = re.compile(
-        r'(?i)(api[\s_-]*key|password|passwd|pwd|'
-        r'(?:db|database)[\s_-]*password|'
-        r'(?:db|database)[\s_-]*url)'
-    )
+    def replace_match(m):
+        matched_name = m.group(1)
+        # Looked up per-match (not captured once outside the loop), so two
+        # different secrets on the same line each get their own correct
+        # env name instead of both inheriting whichever matched first.
+        env_name = _env_name_for(matched_name)
+        if env_name not in env_variables:
+            env_variables.append(env_name)
+        return f'{matched_name} = os.getenv("{env_name}")'
 
-    # Match the ENTIRE Python variable name and its quoted value
-    assignment_pattern = re.compile(
-        r'^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(["\'])(.*?)\3\s*$'
-    )
+    result = SECRET_LINE_RE.sub(replace_match, code)
 
-    for line in lines:
-        match = assignment_pattern.match(line)
-
-        if match:
-            indentation = match.group(1)
-            variable_name = match.group(2)
-
-            # Check the full variable name
-            if secret_pattern.search(variable_name):
-
-                # Preserve the original variable name
-                env_name = variable_name.upper()
-
-                if env_name not in env_variables:
-                    env_variables.append(env_name)
-
-                # Replace the hardcoded secret
-                line = (
-                    f'{indentation}{variable_name} = '
-                    f'os.getenv("{env_name}")'
-                )
-
-        output.append(line)
-
-    result = "\n".join(output)
-
-    # Add os import if needed
     if env_variables and not re.search(
-        r'^\s*import\s+os\s*$',
-        result,
-        re.MULTILINE
+        r'^\s*import\s+os\s*$', result, re.MULTILINE
     ):
         result = "import os\n\n" + result
 
@@ -78,12 +108,12 @@ def scan():
 
     code = data["code"]
 
-    # Run KeyShield
     secured_code, env_variables = keyshield(code)
 
     return jsonify({
         "secured_code": secured_code,
-        "secrets_detected": env_variables
+        "secrets_detected": env_variables,
+        "severity_counts": severity_counts_for(env_variables)
     })
 
 
@@ -102,43 +132,23 @@ def main():
         print("Error: V1 currently supports Python files only.")
         return
 
-    # Read the source file
     with open(filename, "r", encoding="utf-8") as file:
         code = file.read()
 
-    # Run KeyShield
     secured_code, env_variables = keyshield(code)
 
-    # Get the folder containing the original file
     source_folder = os.path.dirname(filename)
-
-    # Get original filename without extension
     filename_only = os.path.basename(filename)
     name, extension = os.path.splitext(filename_only)
 
-    # Create secured folder next to original file
-    output_folder = os.path.join(
-        source_folder,
-        f"{name}_secured"
-    )
-
+    output_folder = os.path.join(source_folder, f"{name}_secured")
     os.makedirs(output_folder, exist_ok=True)
 
-    # Output secured Python file
-    output_filename = os.path.join(
-        output_folder,
-        f"{name}_secured{extension}"
-    )
-
+    output_filename = os.path.join(output_folder, f"{name}_secured{extension}")
     with open(output_filename, "w", encoding="utf-8") as file:
         file.write(secured_code)
 
-    # Output .env.example
-    env_filename = os.path.join(
-        output_folder,
-        ".env.example"
-    )
-
+    env_filename = os.path.join(output_folder, ".env.example")
     with open(env_filename, "w", encoding="utf-8") as file:
         for variable in env_variables:
             file.write(f"{variable}=your_secret_here\n")
@@ -147,13 +157,10 @@ def main():
 
     if env_variables:
         print(f"Secrets detected: {len(env_variables)}")
-
         for variable in env_variables:
             print(f"  - {variable}")
-
         print(f"\nSecured code: {output_filename}")
         print(f"Environment template: {env_filename}")
-
     else:
         print("No secrets detected.")
         print(f"Output: {output_filename}")

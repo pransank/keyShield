@@ -24,9 +24,54 @@ async function getActiveTab() {
     return tab;
 }
 
+const SEVERITY_STYLE = [
+    { key: "serious", label: "Serious", color: "#d93025" },
+    { key: "moderate", label: "Moderate", color: "#f9ab00" },
+    { key: "low", label: "Low", color: "#188038" }
+];
+
+function renderResults(severityCounts) {
+    const resultsEl = document.getElementById("results");
+    const pieEl = document.getElementById("pieChart");
+    const legendEl = document.getElementById("legend");
+
+    const total = SEVERITY_STYLE.reduce(
+        (sum, s) => sum + (severityCounts[s.key] || 0),
+        0
+    );
+
+    if (!severityCounts || total === 0) {
+        resultsEl.classList.add("hidden");
+        return;
+    }
+
+    // Build a conic-gradient stop for each non-zero severity bucket.
+    // No canvas, no SVG, no library — this is the whole "chart".
+    let cumulativeDeg = 0;
+    const stops = [];
+    legendEl.innerHTML = "";
+
+    SEVERITY_STYLE.forEach(({ key, label, color }) => {
+        const count = severityCounts[key] || 0;
+        if (count === 0) return;
+
+        const startDeg = cumulativeDeg;
+        cumulativeDeg += (count / total) * 360;
+        stops.push(`${color} ${startDeg}deg ${cumulativeDeg}deg`);
+
+        const li = document.createElement("li");
+        li.innerHTML = `<span class="dot" style="background:${color}"></span>${label}: ${count}`;
+        legendEl.appendChild(li);
+    });
+
+    pieEl.style.background = `conic-gradient(${stops.join(", ")})`;
+    resultsEl.classList.remove("hidden");
+}
+
 async function init() {
     const button = document.getElementById("scanButton");
     const status = document.getElementById("status");
+    const resultsEl = document.getElementById("results");
 
     const tab = await getActiveTab();
     const platform = detectPlatform(tab?.url);
@@ -44,6 +89,7 @@ async function init() {
     button.addEventListener("click", async () => {
         status.textContent = "Scanning...";
         button.disabled = true;
+        resultsEl.classList.add("hidden");
 
         try {
             const activeTab = await getActiveTab();
@@ -67,6 +113,7 @@ async function init() {
                     }
 
                     status.textContent = response.message;
+                    renderResults(response.severityCounts);
                 }
             );
         } catch (error) {
