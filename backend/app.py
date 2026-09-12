@@ -7,13 +7,12 @@ def keyshield(code):
     output = []
     env_variables = []
 
-    # Detect variations such as:
-    # api_key
-    # APIKEY
-    # api-key
-    # api key
+    # Detect API keys, passwords, and database credentials
     pattern = re.compile(
-        r'(?i)(api[\s_-]*key)\s*=\s*(["\'])(.*?)\2'
+        r'(?i)(api[\s_-]*key|password|passwd|pwd|'
+        r'(?:db|database)[\s_-]*password|'
+        r'(?:db|database)[\s_-]*url)'
+        r'\s*=\s*(["\'])(.*?)\2'
     )
 
     for line in lines:
@@ -22,13 +21,23 @@ def keyshield(code):
         if match:
             original_name = match.group(1)
 
-            # Convert the detected name into an environment-variable name
-            env_name = (
-                original_name
-                .upper()
-                .replace("-", "_")
-                .replace(" ", "_")
-            )
+            # Convert detected name into a standard environment variable
+            name_lower = original_name.lower()
+
+            if re.fullmatch(r'api[\s_-]*key', name_lower):
+                env_name = "API_KEY"
+
+            elif re.fullmatch(r'password|passwd|pwd', name_lower):
+                env_name = "PASSWORD"
+
+            elif re.fullmatch(r'(db|database)[\s_-]*password', name_lower):
+                env_name = "DB_PASSWORD"
+
+            elif re.fullmatch(r'(db|database)[\s_-]*url', name_lower):
+                env_name = "DATABASE_URL"
+
+            else:
+                env_name = original_name.upper()
 
             if env_name not in env_variables:
                 env_variables.append(env_name)
@@ -78,11 +87,11 @@ def main():
     # Get the folder containing the original file
     source_folder = os.path.dirname(filename)
 
-    # Get the original filename without extension
+    # Get original filename without extension
     filename_only = os.path.basename(filename)
     name, extension = os.path.splitext(filename_only)
 
-    # Create a folder next to the original file
+    # Create secured folder next to original file
     output_folder = os.path.join(
         source_folder,
         f"{name}_secured"
@@ -90,7 +99,7 @@ def main():
 
     os.makedirs(output_folder, exist_ok=True)
 
-    # Output Python file
+    # Output secured Python file
     output_filename = os.path.join(
         output_folder,
         f"{name}_secured{extension}"
@@ -121,7 +130,7 @@ def main():
         print(f"Environment template: {env_filename}")
 
     else:
-        print("No API keys detected.")
+        print("No secrets detected.")
         print(f"Output: {output_filename}")
 
 
