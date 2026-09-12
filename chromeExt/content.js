@@ -1,4 +1,5 @@
 async function scanChatGPT() {
+    // 1. Locate the input element
     const textbox = document.querySelector("#prompt-textarea");
 
     if (!textbox) {
@@ -7,18 +8,21 @@ async function scanChatGPT() {
         };
     }
 
-    const code = textbox.value || "";
+    // 2. Check element type and retrieve text safely
+    const isEditable = textbox.isContentEditable;
+    const code = isEditable ? textbox.innerText : textbox.value;
 
-    console.log("KeyShield found textbox:", textbox);
-    console.log("KeyShield textbox content:", code);
+    console.log("KeyShield textbox:", textbox);
+    console.log("KeyShield code:", code);
 
-    if (!code.trim()) {
+    if (!code || !code.trim()) {
         return {
             message: "Textbox is empty."
         };
     }
 
     try {
+        // 3. Send text to local scan backend
         const response = await fetch(
             "http://127.0.0.1:5000/scan",
             {
@@ -40,17 +44,28 @@ async function scanChatGPT() {
 
         const result = await response.json();
 
-        console.log("KeyShield backend response:", result);
+        console.log("KeyShield result:", result);
 
-        if (result.secrets_detected.length === 0) {
+        if (!result.secrets_detected || result.secrets_detected.length === 0) {
             return {
                 message: "No secrets detected."
             };
         }
 
-        textbox.value = result.secured_code;
+        // 4. Update element content based on input type
+        if (isEditable) {
+            // For div contenteditable (ProseMirror)
+            textbox.innerText = result.secured_code;
+        } else {
+            // For standard HTMLTextAreaElement (React bypass)
+            const setter = Object.getOwnPropertyDescriptor(
+                HTMLTextAreaElement.prototype,
+                "value"
+            ).set;
+            setter.call(textbox, result.secured_code);
+        }
 
-        // Tell ChatGPT that the textbox changed
+        // 5. Trigger input event so underlying editor state updates
         textbox.dispatchEvent(
             new Event("input", {
                 bubbles: true
@@ -58,8 +73,7 @@ async function scanChatGPT() {
         );
 
         return {
-            message:
-                `${result.secrets_detected.length} secret(s) secured.`
+            message: `${result.secrets_detected.length} secret(s) secured.`
         };
 
     } catch (error) {
@@ -71,14 +85,12 @@ async function scanChatGPT() {
     }
 }
 
-
+// 6. Chrome Runtime Message Listener
 chrome.runtime.onMessage.addListener(
     (request, sender, sendResponse) => {
-
         if (request.action === "scanChatGPT") {
             scanChatGPT().then(sendResponse);
-
-            return true;
+            return true; // Keeps async channel open for sendResponse
         }
     }
 );
