@@ -43,11 +43,12 @@
         }
     ],
     "commands": {
-        "_execute_action": {
+        "run-scan": {
             "suggested_key": {
                 "default": "Ctrl+Shift+K",
                 "mac": "Command+Shift+K"
-            }
+            },
+        "description": "Run KeyShield Scan"
         }
     }
 }
